@@ -4,15 +4,22 @@
 // consecutive pair of reads in /input/history.ndjson. The forecast is the mixture
 // of the chain's distributions over the 72 hourly horizons of the scored window
 // (horizons read from task.json, never hard-coded), sharpened (gamma 1.5) and
-// left with a 0.2 unnamed residual per place for games the history never saw.
+// left with a per-place unnamed residual (0.25 at places 1-2, 0.2 at 3-5, 0.15
+// at 6-10) for games the history never saw: places 1-2 get more residual because
+// the model is overconfident on the last chart's #1/#2 and brand-new climbers land
+// there unnamed, while places 6-10 are already covered by 48 named games each.
 // Age-out: where details.created is present (the final's house reads), a game
 // stops contributing past created + 28 days, the chart's age limit.
 //
-// Validated on the practice window (local scorer, RULES.txt): log score -33.20,
+// Validated on the practice window (local scorer, RULES.txt): log score -32.99,
 // vs house baseline -43.512039 and house model -37.2; top10 by modal place:
-// 7.3 hits and 55.6 agreement per read (baseline 6.4 / 53.5). Rolling 72h splits
-// (fit on reads[0..upto], score the next ~10 reads) average -37.76.
-// No network, no randomness, deterministic, stdlib only, runs in seconds.
+// 7.3 hits and 55.6 agreement per read (baseline 6.4 / 53.5). A second window
+// built from archive snapshots after the practice window (fit on 44 reads, score
+// 6 reads Nov 10-12) gives -35.64; rolling 72h splits average -37.82; walk-forward
+// over the full 50-read history (12 splits) averages -34.80. v1 (uniform residual
+// 0.2) scored -33.20 / -35.58 / -37.76 / -34.86 on the same four checks — the
+// per-place residual wins 8/12 walk-forward splits. No network, no randomness,
+// deterministic, stdlib only, runs in seconds.
 //
 // Reads $MAKEFUN_INPUT_DIR (else /input) and writes $MAKEFUN_OUTPUT_DIR (else /output).
 
@@ -25,7 +32,7 @@ const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 // --- tuned constants (validated on practice + rolling splits) ---
 const SMOOTH = 0.5; // smoothing mass toward a Gaussian kernel over bin centres
 const KERNEL_W = 4.0; // kernel width (ranks) for that smoothing
-const RESID = 0.2; // unnamed residual left at every place
+const RESID = [0.25, 0.25, 0.2, 0.2, 0.2, 0.15, 0.15, 0.15, 0.15, 0.15]; // unnamed residual left at each place (1..10): more at places 1-2, where the model is overconfident on the last chart's #1/#2 and brand-new climbers land unnamed; less at places 6-10, where 48 named games already cover the field
 const GAMMA = 1.5; // sharpening exponent applied per place (renormalised)
 const MIN_P = 0.002; // smallest named probability per (game, place)
 const MAX_PER_PLACE = 100; // cap of named rows per place (RULES.txt)
@@ -178,7 +185,7 @@ const probabilities: Array<{ universe_id: number; place: number; p: number }> = 
 for (let k = 1; k <= places; k++) {
   const cands = (perPlace.get(k) ?? []).sort((a, b) => b.p - a.p).slice(0, MAX_PER_PLACE);
   let s = cands.reduce((t, c) => t + c.p, 0);
-  const target = 1 - RESID;
+  const target = 1 - RESID[k - 1]!;
   if (s > target) {
     const f = target / s;
     for (const c of cands) c.p *= f;
